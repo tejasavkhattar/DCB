@@ -16,16 +16,46 @@ import time
 import dlib
 import cv2
 
-# Load a sample picture and learn how to recognize it.
-my_image = face_recognition.load_image_file("Vyom.jpg")
-my_face_encoding = face_recognition.face_encodings(my_image)[0]
+# define two constants, one for the eye aspect ratio to indicate
+# blink and then a second constant for the number of consecutive
+# frames the eye must be below the threshold
+# EYE_AR_THRESH = 0.3
+# EYE_AR_CONSEC_FRAMES = 3
 
-# Initialize some variables
+### initialize the frame counters and the total number of blinks
+
+COUNTER = 0
+TOTAL = 0
+
+# Initialize some variables for face_recognition
 face_locations = []
 face_encodings = []
 face_names = []
 process_this_frame = True
 
+
+# Load a sample picture and learn how to recognize it.
+def load_sample_image_encoding(path):
+    my_image = face_recognition.load_image_file(path)
+    my_face_encoding = face_recognition.face_encodings(my_image)[0]
+    return my_face_encoding
+
+def recognise_faces(frame):
+    # Find all the faces and face encodings in the current frame of video
+    face_locations = face_recognition.face_locations(frame)
+    face_encodings = face_recognition.face_encodings(frame, face_locations)
+
+    face_names = []
+    for face_encoding in face_encodings:
+        # See if the face is a match for the known face(s)
+        match = face_recognition.compare_faces([my_face_encoding], face_encoding)
+        name = "Unknown"
+
+        if match[0]:
+                name = "Vyom"
+                
+        face_names.append(name)
+    return face_names
 
 def eye_aspect_ratio(eye):
     # compute the euclidean distances between the two sets of
@@ -43,65 +73,28 @@ def eye_aspect_ratio(eye):
     # return the eye aspect ratio
     return ear
 
-# define two constants, one for the eye aspect ratio to indicate
-# blink and then a second constant for the number of consecutive
-# frames the eye must be below the threshold
-EYE_AR_THRESH = 0.3
-EYE_AR_CONSEC_FRAMES = 3
-
-### initialize the frame counters and the total number of blinks
-
-COUNTER = 0
-TOTAL = 0
-
-print("[INFO] loading facial landmark predictor...")
-detector = dlib.get_frontal_face_detector()
-shape_detector_file="shape_predictor_68_face_landmarks.dat"
-predictor = dlib.shape_predictor(shape_detector_file)
-
-# grab the indexes of the facial landmarks for the left and
-# right eye, respectively
-(lStart, lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
-(rStart, rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
-
-
-# start the video stream thread
-print("[INFO] starting video stream thread...")
-# vs = FileVideoStream(args["video"]).start()
-fileStream = True
-# vs = VideoStream(src=0).start()
-vs = cv2.VideoCapture(0)
-
-# loop over frames from the video stream
-while True:
+def init_blink_detection():
+    print("[INFO] loading facial landmark predictor...")
+    detector = dlib.get_frontal_face_detector()
+    shape_detector_file="shape_predictor_68_face_landmarks.dat"
+    predictor = dlib.shape_predictor(shape_detector_file)
     
-    ret, frame = vs.read()
-    frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
+    # grab the indexes of the facial landmarks for the left and
+    # right eye, respectively
+    (lStart, lEnd) = face_utils.FACIAL_LANDMARKS_IDXS["left_eye"]
+    (rStart, rEnd) = face_utils.FACIAL_LANDMARKS_IDXS["right_eye"]
     
-    if process_this_frame:
-        # Find all the faces and face encodings in the current frame of video
-        face_locations = face_recognition.face_locations(frame)
-        face_encodings = face_recognition.face_encodings(frame, face_locations)
+    return detector, predictor, lStart, lEnd, rStart, rEnd
 
-        face_names = []
-        for face_encoding in face_encodings:
-            # See if the face is a match for the known face(s)
-            match = face_recognition.compare_faces([my_face_encoding], face_encoding)
-            name = "Unknown"
-
-            if match[0]:
-                name = "Vyom"
-
-            face_names.append(name)
-
-    process_this_frame = not process_this_frame
-    
+def count_blinks(frame, EYE_AR_THRESH=0.3, EYE_AR_CONSEC_FRAMES=3):
     gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-
+    
+    #INIT
+    detector, predictor, lStart, lEnd, rStart, rEnd = init_blink_detection()
+    
     # detect faces in the grayscale frame
     rects = detector(gray, 0)
-    print('Detected:',face_names)
-
+    
     # loop over the face detections
     for rect in rects:
         # determine the facial landmarks for the face region, then
@@ -143,27 +136,58 @@ while True:
 
             # reset the eye frame counter
             COUNTER = 0
-
+        
         # draw the total number of blinks on the frame along with
         # the computed eye aspect ratio for the frame
         cv2.putText(frame, "Blinks: {}".format(TOTAL), (10, 30),
             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
         cv2.putText(frame, "EAR: {:.2f}".format(ear), (300, 30),
             cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 255), 2)
+        
+        return frame, TOTAL
+        
 
-    # show the frame
-    cv2.imshow("Frame", frame)
-    key = cv2.waitKey(1) & 0xFF
+def start_video_stream(src=0):
+    # start the video stream thread
+    print("[INFO] starting video stream thread...")
+    # vs = FileVideoStream(args["video"]).start()
+    fileStream = True
+    # vs = VideoStream(src=0).start()
+    vs = cv2.VideoCapture(src)
+    return vs
 
-    # if the `q` key was pressed, break from the loop
-    if key == ord("q"):
-        break
+def process_videostream(escape_key="q"):
+    # loop over frames from the video stream
+    while True:
 
-print('Closing video stream...')
-vs.release()
-cv2.destroyAllWindows()
+        vs = start_video_stream(src=0)
+        ret, frame = vs.read()
+        frame = cv2.resize(frame, (0, 0), fx=0.25, fy=0.25)
 
+        #get names of people recognised in the images
+        # skipping every alternate frame for faster processing
+        if process_this_frame:
+            face_names = recognise_faces(frame)
+        process_this_frame = not process_this_frame
 
+        #count blinks
+        frame, TOTAL = count_blinks(frame, EYE_AR_THRESH=0.3, EYE_AR_CONSEC_FRAMES=3)
 
-# fileStream = False
-time.sleep(1.0)
+        # show the frame
+        #cv2.imshow("Frame", frame)
+        #key = cv2.waitKey(1) & 0xFF
+
+        # if the `q` key was pressed, break from the loop
+        if key == ord(escape_key):
+            close_videostream(vs)
+            break
+        else:
+            yeild (frame, face_names, TOTAL)
+
+def close_videostream(videostream)
+    print('Closing video stream...')
+    videostream.release()
+    cv2.destroyAllWindows()
+    # fileStream = False
+    time.sleep(1.0)
+    
